@@ -1,0 +1,167 @@
+---
+title: "WECC Cold Weather Analysis"
+output:
+  html_document:
+    theme: cerulean
+    code_folding: hide
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+```{r}
+library(tidyverse)
+library(mosaic)
+library(dplyr)
+library(ResourceSelection)
+library(readr)
+library(pander)
+
+df<- read_csv("weather_summary.csv", 
+    col_types = cols(avg_temp = col_number()))
+
+```
+
+Authors: JT Twiggs & Sheldon Downs
+
+## {.tabset}
+
+
+### Graph and Model
+
+We were tasked by WECC (Western Electric Coordinating Council) to gather weather data for the state of Idaho and create a model that looks for and predicts extreme cold weather. We decided that extreme cold weather would be 10 degrees Fahrenheit or below. Our data was scraped from the web and contain weather data from January 1st 2021 - December 31st 2022. We lagged our data so that our model would predict if the next day would have extreme cold weather biased on the weather data from the day before.
+
+
+```{r}
+df <- df %>%
+  mutate(extream = ifelse(avg_temp <10, 1, 0))
+```
+
+
+```{r}
+bin_conditions <- df %>%
+  mutate(condition_bin = case_when(
+    condition %in% c('light_snow','ice_fog', 'passing_clouds') ~ 'light_snow',
+    condition %in% c('clouds','light_rain','fog',
+                  'broken_clouds','partly_sun') ~ 'overcast',
+    condition == 'sun' ~ 'sun',
+    condition == 'clear' ~ 'clear',
+    condition == 'low_clouds' ~ 'low_clouds'
+  )) %>%
+  mutate(sun_snow = ifelse(condition_bin %in% c('light_snow', 'sun'),1,0))
+```
+
+
+```{r}
+wglm <- glm(extream ~ avg_pressure + month  *  avg_humidity + I(avg_humidity^2) + sun_snow ,data = bin_conditions, family = binomial)
+pander(summary(wglm))
+b <- coef(wglm)
+```
+
+
+```{r}
+plot(extream==1 ~ avg_humidity, bin_conditions, cex=0.7, pch=16, col=rgb(.2,.2,.2,.6), main = 'Chance of Extreme Cold Temp. in Idaho', xlab = 'Average Humidity', ylab = 'Probability of Temp. < 10 Degrees')
+legend("topleft", legend=c("January", "February", 'December'), lty=c(1,1,1), bty="n", col=c('red', 'blue', 'green4'))
+x1 = 30.20
+x2 = 1
+x5 = 1
+curve(exp(b[1] + b[2] * x1 + b[3] * x2 + b[4] * x + b[5] * x^2 + b[6] * x5 + b[7] *x  ) / (1+exp(b[1] + b[2] * x1 + b[3] * x2 + b[4] * x + b[5] * x^2 + b[6] * x5 + b[7] *x )), add=TRUE, col = "red", lwd = 2)
+#--------
+x1 = 30.20
+x2 = 2
+x5 = 1
+curve(exp(b[1] + b[2] * x1 + b[3] * x2 + b[4] * x + b[5] * x^2 + b[6] * x5 + b[7] *x  ) / (1+exp(b[1] + b[2] * x1 + b[3] * x2 + b[4] * x + b[5] * x^2 + b[6] * x5 + b[7] *x )), add=TRUE, col = "blue", lwd = 2)
+#--------
+x1 = 30.06
+x2 = 12
+x5 = 1
+curve(exp(b[1] + b[2] * x1 + b[3] * x2 + b[4] * x + b[5] * x^2 + b[6] * x5 + b[7] *x  ) / (1+exp(b[1] + b[2] * x1 + b[3] * x2 + b[4] * x + b[5] * x^2 + b[6] * x5 + b[7] *x )), add=TRUE, col = "green4", lwd = 2)
+```
+
+This graphic shows three different slices of the model when it would be most likely to have extreme cold weather. Something that stands out from the graph is that there is a range of humitiy from about 0.58 and 0.8 for it to able to be extremely cold
+
+
+### Validation
+
+
+```{r message=FALSE, warning=FALSE}
+set.seed(121)
+n <- nrow(bin_conditions)
+keep <- sample(1:n, round(0.7*n)) #putSomeNumberHere that is about 60-70% of your data set's size)
+mytrain <- bin_conditions[keep, ]
+mytest <- bin_conditions[-keep, ]
+train.glm <- glm(extream ~ avg_pressure + month * avg_humidity + I(avg_humidity^2) + sun_snow ,data = bin_conditions, family = binomial)
+mypreds <- predict(train.glm, mytest, type="response")
+callit <- ifelse(mypreds >= 0.4, 1, 0) #you can put whatever you want for the 0.9 value
+```
+
+
+```{r}
+conf_matrix <- table(mytest$extream, callit)
+conf_matrix
+```
+
+Model accuracy:
+```{r}
+pcc <- (214 + 3)/ (214 + 2 + 3)
+pcc
+```
+
+
+### Model Interpretation
+
+
+```{r}
+winter <- bin_conditions %>%
+  filter(month %in% c(1,2,12))
+```
+
+
+```{r}
+wint_glm <- glm(extream ~ avg_pressure + month * avg_humidity + I(avg_humidity^2) + sun_snow ,data = winter, family = binomial)
+#summary(wglm)
+```
+
+
+```{r}
+#summary(wglm)
+```
+
+
+```{r}
+library(ResourceSelection)
+hoslem.test(wglm$y, wglm$fit, g=10)
+```
+
+
+```{r}
+odd_coef <- (1- exp(b))
+pander(odd_coef)
+```
+
+
+Each of the above values demonstrate how a one-unit increase in each predictor will affect the chances of extreme weather occurring. For example, for every 0.01 unit increase in the avg_pressure, there is a -35.2% change in the odds of extreme weather. Furthermore, the odds of extreme weather increase by 97.4% for each one month increase.
+
+
+```{r}
+ggplot(winter,
+       aes(x = avg_humidity, y = extream,color = as.factor(month))) +
+  geom_point(alpha=0.7) +
+  geom_smooth(method="glm", formula=y~poly(x,2), method.args=list(family="binomial")) +
+  geom_point(aes(y=wint_glm$fit), size=0.8, alpha=0.3) +
+  facet_grid(~month)
+```
+
+```{r}
+ggplot(winter,
+       aes(x = avg_pressure, y = extream,color = as.factor(month))) +
+  geom_point(alpha=0.7) +
+  geom_smooth(method="glm", formula=y~poly(x,2), method.args=list(family="binomial")) +
+  geom_point(aes(y=wint_glm$fit), size=0.8, alpha=0.3) +
+  facet_grid(~month)
+```
